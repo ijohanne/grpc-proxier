@@ -30,7 +30,7 @@ pub async fn handle_request(
     let path = req.uri().path().to_owned();
 
     match handle_request_inner(req, &state, &path).await {
-        Ok(response) => {
+        Ok((response, username)) => {
             let duration = start.elapsed().as_secs_f64();
             let (service, method) = parse_grpc_path(&path);
 
@@ -45,7 +45,7 @@ pub async fn handle_request(
             state
                 .metrics
                 .requests_total
-                .with_label_values(&["_proxied", service, method, &grpc_status])
+                .with_label_values(&[username.as_str(), service, method, &grpc_status])
                 .inc();
 
             Ok(response.map(Either::Left))
@@ -97,9 +97,10 @@ async fn handle_request_inner(
     req: Request<Incoming>,
     state: &AppState,
     path: &str,
-) -> Result<Response<Incoming>, ProxyError> {
-    if state.skip_auth {
+) -> Result<(Response<Incoming>, String), ProxyError> {
+    let username = if state.skip_auth {
         tracing::debug!(path = %path, "proxying request (auth skipped)");
+        "Anonymous".to_owned()
     } else {
         let auth_header = req
             .headers()
@@ -111,7 +112,8 @@ async fn handle_request_inner(
         auth::authorize(&username, path, &state.config)?;
 
         tracing::debug!(user = %username, path = %path, "proxying request");
-    }
+        username
+    };
 
     let upstream_uri: Uri = format!("http://{}{}", state.config.upstream_address, path)
         .parse()
@@ -123,11 +125,13 @@ async fn handle_request_inner(
 
     let upstream_req = Request::from_parts(parts, body);
 
-    state
+    let response = state
         .upstream_client
         .request(upstream_req)
         .await
-        .map_err(|e| ProxyError::UpstreamRequest(e.to_string()))
+        .map_err(|e| ProxyError::UpstreamRequest(e.to_string()))?;
+
+    Ok((response, username))
 }
 
 fn parse_grpc_path(path: &str) -> (&str, &str) {
