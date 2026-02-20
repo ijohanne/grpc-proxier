@@ -1,0 +1,12 @@
+listen_address = "127.0.0.1:50051"
+upstream_address = "127.0.0.1:50052"
+metrics_address = "0.0.0.0:9090"
+
+[users.alice]
+allowed_calls = [
+  "mypackage.MyService/GetStatus",
+  "mypackage.MyService/ListItems",
+]
+
+[users.bob]
+allowed_calls = ["*"]

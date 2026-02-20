@@ -1,0 +1,20 @@
+[package]
+name = "grpc-proxier"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hyper = { version = "1", features = ["http2", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "http2", "server-auto", "client-legacy"] }
+http-body-util = "0.1"
+http = "1"
+bytes = "1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+argon2 = { version = "0.5", features = ["std"] }
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+prometheus = { version = "0.14", features = ["process"] }
