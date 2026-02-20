@@ -4,3 +4,4 @@
 .env
 config.toml
 credentials
+.pre-commit-config.yaml
