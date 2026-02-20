@@ -34,7 +34,7 @@ test:
 
 # Generate argon2 hash for a password
 hash-password PASSWORD:
-    @cargo run --example hash_password -- "{{PASSWORD}}"
+    @echo "{{PASSWORD}}" | cargo run --bin grpc-proxier-hash
 
 # Clean build artifacts
 clean:
