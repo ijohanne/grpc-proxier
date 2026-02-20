@@ -62,20 +62,12 @@ bob:$argon2id$v=19$m=19456,t=2,p=1$...
 
 ### Generating Passwords
 
-Use `just hash-password` or write a small Rust program:
+Use the included `grpc-proxier-hash` binary, which reads a password from stdin:
 
-```rust
-use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
-use argon2::Argon2;
-
-fn main() {
-    let password = std::env::args().nth(1).expect("usage: hash_password <password>");
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .expect("hashing failed");
-    println!("{hash}");
-}
+```bash
+echo "mypassword" | grpc-proxier-hash
+# or via just:
+just hash-password mypassword
 ```
 
 ### Environment Variables
@@ -131,11 +123,12 @@ Users and their allowed calls are defined directly in Nix. The module generates 
             "mypackage.MyService/GetStatus"
             "mypackage.MyService/ListItems"
           ];
-          passwordHashFile = config.sops.secrets.grpc-proxier-alice.path;
+          passwordFile = config.sops.secrets.grpc-proxier-alice.path;
+          # or: passwordHashFile = config.sops.secrets.grpc-proxier-alice-hash.path;
         };
         bob = {
           allowedCalls = [ "*" ];
-          passwordHashFile = config.sops.secrets.grpc-proxier-bob.path;
+          passwordFile = config.sops.secrets.grpc-proxier-bob.path;
         };
       };
     };
@@ -154,18 +147,69 @@ Each instance gets a hardened systemd service (`grpc-proxier-<name>`).
 
 ### Credentials with SOPS
 
-Password hashes are secrets and should be managed with [sops-nix](https://github.com/Mic92/sops-nix). Each user's `passwordHashFile` points to a sops-decrypted file containing just the raw argon2 hash.
+Credentials should be managed with [sops-nix](https://github.com/Mic92/sops-nix). There are two approaches:
 
-#### 1. Generate password hashes
+- **`passwordFile`** — store cleartext passwords in SOPS (encrypted at rest). The service hashes them with argon2 at startup. Simpler workflow and lets you retain the original password for rotation/auditing.
+- **`passwordHashFile`** — store pre-hashed argon2 values. Use this if you don't want cleartext passwords on disk even momentarily during startup.
+
+#### Using `passwordFile` (recommended)
+
+Store cleartext passwords in SOPS — the module hashes them automatically at startup:
+
+```bash
+sops secrets/grpc-proxier.yaml
+```
+
+```yaml
+alice_password: "mysecretpassword"
+bob_password: "anothersecret"
+```
+
+```nix
+{ config, ... }:
+{
+  sops.secrets.grpc-proxier-alice = {
+    sopsFile = ./secrets/grpc-proxier.yaml;
+    key = "alice_password";
+    owner = "grpc-proxier";
+  };
+
+  sops.secrets.grpc-proxier-bob = {
+    sopsFile = ./secrets/grpc-proxier.yaml;
+    key = "bob_password";
+    owner = "grpc-proxier";
+  };
+
+  services.grpc-proxier.instances.production = {
+    listenPort = 50051;
+    upstreamAddress = "10.0.0.5:50052";
+
+    users = {
+      alice = {
+        allowedCalls = [
+          "mypackage.MyService/GetStatus"
+          "mypackage.MyService/ListItems"
+        ];
+        passwordFile = config.sops.secrets.grpc-proxier-alice.path;
+      };
+      bob = {
+        allowedCalls = [ "*" ];
+        passwordFile = config.sops.secrets.grpc-proxier-bob.path;
+      };
+    };
+  };
+}
+```
+
+At service start, the module reads each cleartext password, hashes it with `grpc-proxier-hash`, and assembles the credentials file automatically.
+
+#### Using `passwordHashFile`
+
+Pre-hash passwords and store the hashes in SOPS:
 
 ```bash
 just hash-password mysecretpassword
 # outputs: $argon2id$v=19$m=19456,t=2,p=1$abc123.../def456...
-```
-
-#### 2. Create the sops secrets file
-
-```bash
 sops secrets/grpc-proxier.yaml
 ```
 
@@ -173,8 +217,6 @@ sops secrets/grpc-proxier.yaml
 alice_hash: "$argon2id$v=19$m=19456,t=2,p=1$..."
 bob_hash: "$argon2id$v=19$m=19456,t=2,p=1$..."
 ```
-
-#### 3. Reference in NixOS config
 
 ```nix
 { config, ... }:

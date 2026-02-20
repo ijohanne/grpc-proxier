@@ -34,7 +34,7 @@ test:
 
 # Generate argon2 hash for a password
 hash-password PASSWORD:
-    @echo 'use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString}; use argon2::Argon2; fn main() { let salt = SaltString::generate(&mut OsRng); let hash = Argon2::default().hash_password(std::env::args().nth(1).unwrap().as_bytes(), &salt).unwrap(); println!("{}", hash.to_string()); }' | cargo +stable script --edition 2021 -- "{{PASSWORD}}" 2>/dev/null || echo "Requires 'cargo script' or use: cargo run --example hash_password -- {{PASSWORD}}"
+    @echo "{{PASSWORD}}" | cargo run --bin grpc-proxier-hash
 
 # Clean build artifacts
 clean:

@@ -22,8 +22,20 @@ let
         default = null;
         description = ''
           Path to a file containing the argon2 password hash for this user.
-          Useful for per-user sops secrets. Mutually exclusive with the
-          instance-level credentialsFile.
+          Useful for per-user sops secrets. Mutually exclusive with
+          passwordFile and the instance-level credentialsFile.
+        '';
+      };
+
+      passwordFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Path to a file containing the cleartext password for this user.
+          The password is hashed with argon2 at service startup.
+          Useful with sops when you want to store cleartext passwords
+          (encrypted at rest) instead of pre-hashed values.
+          Mutually exclusive with passwordHashFile.
         '';
       };
     };
@@ -148,11 +160,14 @@ let
       ${usersSections}
     '';
 
-  # Assemble a credentials file from per-user passwordHashFile options
+  # Whether a user has any per-user credential source
+  hasUserCredential = ucfg: ucfg.passwordHashFile != null || ucfg.passwordFile != null;
+
+  # Assemble a credentials file from per-user passwordHashFile/passwordFile options
   mkCredentialsScript =
     name: icfg:
     let
-      users = lib.filterAttrs (_: ucfg: ucfg.passwordHashFile != null) icfg.users;
+      users = lib.filterAttrs (_: hasUserCredential) icfg.users;
     in
     pkgs.writeShellScript "grpc-proxier-${name}-credentials" (
       ''
@@ -161,9 +176,17 @@ let
         mkdir -p "$(dirname "$CREDS")"
       ''
       + lib.concatStringsSep "" (
-        lib.mapAttrsToList (username: ucfg: ''
-          printf '%s:%s\n' "${username}" "$(cat "${ucfg.passwordHashFile}")" >> "$CREDS"
-        '') users
+        lib.mapAttrsToList (
+          username: ucfg:
+          if ucfg.passwordHashFile != null then
+            ''
+              printf '%s:%s\n' "${username}" "$(cat "${ucfg.passwordHashFile}")" >> "$CREDS"
+            ''
+          else
+            ''
+              printf '%s:%s\n' "${username}" "$(cat "${ucfg.passwordFile}" | ${icfg.package}/bin/grpc-proxier-hash)" >> "$CREDS"
+            ''
+        ) users
       )
       + ''
         echo "$CREDS"
@@ -181,7 +204,11 @@ let
       "/run/grpc-proxier/${name}/credentials";
 
   # Whether this instance needs a pre-start script to assemble credentials
-  needsCredentialsAssembly = icfg: !icfg.noAuth && icfg.credentialsFile == null && icfg.users != { };
+  needsCredentialsAssembly =
+    icfg:
+    !icfg.noAuth
+    && icfg.credentialsFile == null
+    && lib.any hasUserCredential (lib.attrValues icfg.users);
 in
 {
   options.services.grpc-proxier = {
@@ -222,9 +249,18 @@ in
         assertion =
           icfg.noAuth
           || icfg.credentialsFile != null
-          || lib.all (ucfg: ucfg.passwordHashFile != null) (lib.attrValues icfg.users);
-        message = "grpc-proxier.instances.${name}: each user needs a passwordHashFile, or set a credentialsFile, or enable noAuth.";
-      }) enabledInstances;
+          || lib.all hasUserCredential (lib.attrValues icfg.users);
+        message = "grpc-proxier.instances.${name}: each user needs a passwordHashFile or passwordFile, or set a credentialsFile, or enable noAuth.";
+      }) enabledInstances
+      ++ lib.concatLists (
+        lib.mapAttrsToList (
+          name: icfg:
+          lib.mapAttrsToList (username: ucfg: {
+            assertion = !(ucfg.passwordHashFile != null && ucfg.passwordFile != null);
+            message = "grpc-proxier.instances.${name}.users.${username}: passwordHashFile and passwordFile are mutually exclusive.";
+          }) icfg.users
+        ) enabledInstances
+      );
 
     users.users.${cfg.user} = {
       isSystemUser = true;
