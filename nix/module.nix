@@ -107,33 +107,35 @@ let
 
       package = lib.mkOption {
         type = lib.types.package;
-        default = pkgs.grpc-proxier;
+        default = cfg.package;
+        defaultText = lib.literalExpression "config.services.grpc-proxier.package";
         description = "The grpc-proxier package to use.";
       };
 
       nginx = {
-        enable = lib.mkEnableOption "nginx TLS termination in front of this grpc-proxier instance";
-
         domain = lib.mkOption {
-          type = lib.types.str;
-          description = "Domain name for the nginx virtual host and ACME certificate.";
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "Domain name for the nginx virtual host. If set, an nginx reverse proxy is configured for this domain.";
         };
 
-        port = lib.mkOption {
-          type = lib.types.port;
-          default = 443;
-          description = "Port for the nginx HTTPS listener.";
-        };
-
-        acme = lib.mkEnableOption "ACME (Let's Encrypt) certificate for the domain" // {
+        acme = lib.mkOption {
+          type = lib.types.bool;
           default = true;
+          description = "Whether to enable ACME (Let's Encrypt) on the nginx virtual host. Only applies when domain is set.";
+        };
+
+        acmeRoot = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "Override the ACME webroot. Defaults to null for DNS-01 validation. Only applies when acme is enabled.";
         };
       };
     };
   };
 
   enabledInstances = cfg.instances;
-  nginxInstances = lib.filterAttrs (_: icfg: icfg.nginx.enable) enabledInstances;
+  nginxInstances = lib.filterAttrs (_: icfg: icfg.nginx.domain != null) enabledInstances;
 
   # Generate the TOML config for an instance entirely from Nix options
   mkInstanceConfig =
@@ -212,6 +214,11 @@ let
 in
 {
   options.services.grpc-proxier = {
+    package = lib.mkOption {
+      type = lib.types.package;
+      description = "The grpc-proxier package to use.";
+    };
+
     instances = lib.mkOption {
       type = lib.types.attrsOf (lib.types.submodule instanceModule);
       default = { };
@@ -312,57 +319,41 @@ in
       }
     ) enabledInstances;
 
-    # nginx virtual hosts for instances with nginx.enable = true
-    services.nginx = lib.mkIf (nginxInstances != { }) {
-      enable = true;
+    # nginx virtual hosts for instances with a domain set
+    services.nginx.virtualHosts = lib.mkIf (nginxInstances != { }) (
+      lib.mapAttrs' (
+        _: icfg:
+        lib.nameValuePair icfg.nginx.domain (
+          {
+            enableACME = icfg.nginx.acme;
+            forceSSL = icfg.nginx.acme;
+            locations."/" = {
+              extraConfig = ''
+                # gRPC proxying
+                grpc_pass grpc://${icfg.listenAddress}:${toString icfg.listenPort};
 
-      # Recommended defaults for gRPC proxying
-      recommendedProxySettings = true;
-      recommendedTlsSettings = true;
+                # Forward authentication headers
+                grpc_set_header Authorization $http_authorization;
 
-      virtualHosts = lib.mapAttrs' (
-        name: icfg:
-        let
-          useSSL = icfg.nginx.acme;
-        in
-        lib.nameValuePair "grpc-proxier-${name}" {
-          serverName = icfg.nginx.domain;
-          listen = [
-            {
-              addr = "0.0.0.0";
-              inherit (icfg.nginx) port;
-              ssl = useSSL;
-              extraParameters = [ "http2" ];
-            }
-          ];
+                # Forward client identity
+                grpc_set_header X-Real-IP $remote_addr;
+                grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                grpc_set_header X-Forwarded-Proto $scheme;
 
-          enableACME = lib.mkIf useSSL true;
-          forceSSL = lib.mkIf useSSL true;
+                # gRPC timeouts
+                grpc_read_timeout 300s;
+                grpc_send_timeout 300s;
 
-          # gRPC proxy to the backend instance
-          locations."/" = {
-            extraConfig = ''
-              # gRPC proxying
-              grpc_pass grpc://${icfg.listenAddress}:${toString icfg.listenPort};
-
-              # Forward authentication headers
-              grpc_set_header Authorization $http_authorization;
-
-              # Forward client identity
-              grpc_set_header X-Real-IP $remote_addr;
-              grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              grpc_set_header X-Forwarded-Proto $scheme;
-
-              # gRPC timeouts
-              grpc_read_timeout 300s;
-              grpc_send_timeout 300s;
-
-              # Allow large messages (gRPC default max is ~4MB)
-              client_max_body_size 0;
-            '';
-          };
-        }
-      ) nginxInstances;
-    };
+                # Allow large messages (gRPC default max is ~4MB)
+                client_max_body_size 0;
+              '';
+            };
+          }
+          // lib.optionalAttrs icfg.nginx.acme {
+            inherit (icfg.nginx) acmeRoot;
+          }
+        )
+      ) nginxInstances
+    );
   };
 }
