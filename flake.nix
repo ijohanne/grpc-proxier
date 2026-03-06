@@ -27,7 +27,6 @@
           inherit system;
           overlays = [
             rust-overlay.overlays.default
-            self.overlays.default
           ];
         };
 
@@ -91,12 +90,13 @@
       }
     )
     // {
-      overlays.default = final: _prev: {
-        inherit (self.packages.${final.system}) grpc-proxier;
-      };
-
       nixosModules = {
-        grpc-proxier = import ./nix/module.nix;
+        grpc-proxier =
+          { pkgs, lib, ... }:
+          {
+            imports = [ ./nix/module.nix ];
+            config.services.grpc-proxier.package = lib.mkDefault self.packages.${pkgs.system}.grpc-proxier;
+          };
         monitoring = import ./nix/monitoring.nix;
 
         default =
