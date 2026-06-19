@@ -45,7 +45,18 @@
             detect-private-keys.enable = true;
             check-toml.enable = true;
             check-json.enable = true;
-            typos.enable = true;
+            typos = {
+              enable = true;
+              settings = {
+                exclude = [
+                  ".callis.lock"
+                  ".claude/**"
+                  ".codex/**"
+                  ".opencode/**"
+                ];
+                config.default.extend-words.callis = "callis";
+              };
+            };
             nixfmt = {
               enable = true;
               package = pkgs.nixfmt-rfc-style;
@@ -95,7 +106,9 @@
           { pkgs, lib, ... }:
           {
             imports = [ ./nix/module.nix ];
-            config.services.grpc-proxier.package = lib.mkDefault self.packages.${pkgs.system}.grpc-proxier;
+            config.services.grpc-proxier.package =
+              lib.mkDefault
+                self.packages.${pkgs.stdenv.hostPlatform.system}.grpc-proxier;
           };
         monitoring = import ./nix/monitoring.nix;
 
